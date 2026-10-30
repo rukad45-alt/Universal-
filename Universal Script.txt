@@ -1,0 +1,670 @@
+--[[
+    olliE Universal — Aimbot / ESP / Triggerbot / Speed / Noclip / Fling / Kill
+    Rayfield UI · clean · smooth · config save
+    loadstring this whole file in any executor that supports getgenv / HttpGet
+]]
+
+local Rayfield = loadstring(game:HttpGet("https://sirius.menu/rayfield"))()
+
+local Players           = game:GetService("Players")
+local RunService        = game:GetService("RunService")
+local UserInputService  = game:GetService("UserInputService")
+local TweenService      = game:GetService("TweenService")
+local Workspace         = game:GetService("Workspace")
+local LocalPlayer       = Players.LocalPlayer
+local Camera            = Workspace.CurrentCamera
+local Mouse             = LocalPlayer:GetMouse()
+
+-- ─── state ───────────────────────────────────────────────────────────────────
+local Settings = {
+    -- Aimbot
+    AimbotEnabled   = false,
+    AimbotKey       = Enum.UserInputType.MouseButton2,
+    AimbotHold      = true,
+    AimPart         = "Head",
+    FOV             = 120,
+    Smoothness      = 0.18,          -- 0 = instant, 1 = slow
+    TeamCheck       = true,
+    VisibleCheck    = true,
+    Prediction      = 0.12,
+    ShowFOV         = true,
+    FOVColor        = Color3.fromRGB(255, 80, 80),
+
+    -- Triggerbot
+    TriggerEnabled  = false,
+    TriggerDelay    = 0.04,
+    TriggerRadius   = 8,
+
+    -- ESP
+    ESPEnabled      = false,
+    ESPBox          = true,
+    ESPName         = true,
+    ESPHealth       = true,
+    ESPDistance     = true,
+    ESPTracer       = false,
+    ESPMaxDist      = 1200,
+    ESPColor        = Color3.fromRGB(0, 255, 140),
+    ESPTeamColor    = true,
+
+    -- Movement
+    SpeedEnabled    = false,
+    WalkSpeed       = 50,
+    JumpPower       = 50,
+    NoclipEnabled   = false,
+
+    -- Misc
+    FlingForce      = 150,
+}
+
+local State = {
+    AimTarget       = nil,
+    HoldingAimKey   = false,
+    ESPObjects      = {},
+    NoclipConn      = nil,
+    SpeedConn       = nil,
+    FOVCircle       = nil,
+}
+
+-- ─── helpers ─────────────────────────────────────────────────────────────────
+local function isAlive(plr)
+    local char = plr.Character
+    if not char then return false end
+    local hum = char:FindFirstChildOfClass("Humanoid")
+    local hrp = char:FindFirstChild("HumanoidRootPart")
+    return hum and hrp and hum.Health > 0
+end
+
+local function sameTeam(plr)
+    if not Settings.TeamCheck then return false end
+    if LocalPlayer.Team and plr.Team then
+        return LocalPlayer.Team == plr.Team
+    end
+    return false
+end
+
+local function isVisible(part)
+    if not Settings.VisibleCheck then return true end
+    local origin = Camera.CFrame.Position
+    local dir    = (part.Position - origin)
+    local ray    = Ray.new(origin, dir.Unit * dir.Magnitude)
+    local hit    = Workspace:FindPartOnRayWithIgnoreList(ray, {LocalPlayer.Character, Camera})
+    return hit == nil or hit:IsDescendantOf(part.Parent)
+end
+
+local function getClosestInFOV()
+    local closest, closestDist = nil, Settings.FOV
+    local screenCenter = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
+
+    for _, plr in ipairs(Players:GetPlayers()) do
+        if plr == LocalPlayer or not isAlive(plr) or sameTeam(plr) then continue end
+        local part = plr.Character:FindFirstChild(Settings.AimPart)
+        if not part then continue end
+        if not isVisible(part) then continue end
+
+        local screenPos, onScreen = Camera:WorldToViewportPoint(part.Position)
+        if not onScreen then continue end
+
+        local dist = (Vector2.new(screenPos.X, screenPos.Y) - screenCenter).Magnitude
+        if dist < closestDist then
+            closestDist = dist
+            closest = part
+        end
+    end
+    return closest
+end
+
+local function predictPos(part)
+    if Settings.Prediction <= 0 then return part.Position end
+    local vel = part.AssemblyLinearVelocity or part.Velocity or Vector3.zero
+    return part.Position + vel * Settings.Prediction
+end
+
+-- ─── FOV circle ──────────────────────────────────────────────────────────────
+local function createFOV()
+    if State.FOVCircle then State.FOVCircle:Remove() end
+    local c = Drawing.new("Circle")
+    c.Thickness = 1.5
+    c.NumSides  = 64
+    c.Radius    = Settings.FOV
+    c.Filled    = false
+    c.Color     = Settings.FOVColor
+    c.Transparency = 0.7
+    c.Visible   = Settings.ShowFOV and Settings.AimbotEnabled
+    State.FOVCircle = c
+end
+
+local function updateFOV()
+    if not State.FOVCircle then return end
+    local center = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
+    State.FOVCircle.Position = center
+    State.FOVCircle.Radius   = Settings.FOV
+    State.FOVCircle.Color    = Settings.FOVColor
+    State.FOVCircle.Visible  = Settings.ShowFOV and Settings.AimbotEnabled
+end
+
+-- ─── aimbot loop ─────────────────────────────────────────────────────────────
+RunService.RenderStepped:Connect(function()
+    updateFOV()
+
+    if not Settings.AimbotEnabled then
+        State.AimTarget = nil
+        return
+    end
+
+    local shouldAim = Settings.AimbotHold and State.HoldingAimKey or not Settings.AimbotHold
+    if not shouldAim then
+        State.AimTarget = nil
+        return
+    end
+
+    local target = getClosestInFOV()
+    State.AimTarget = target
+    if not target then return end
+
+    local goal = predictPos(target)
+    local current = Camera.CFrame
+    local lookAt  = CFrame.new(current.Position, goal)
+    Camera.CFrame = current:Lerp(lookAt, 1 - Settings.Smoothness)
+end)
+
+UserInputService.InputBegan:Connect(function(input, gpe)
+    if gpe then return end
+    if input.UserInputType == Settings.AimbotKey or input.KeyCode == Settings.AimbotKey then
+        State.HoldingAimKey = true
+    end
+end)
+
+UserInputService.InputEnded:Connect(function(input)
+    if input.UserInputType == Settings.AimbotKey or input.KeyCode == Settings.AimbotKey then
+        State.HoldingAimKey = false
+    end
+end)
+
+-- ─── triggerbot ──────────────────────────────────────────────────────────────
+local lastTrigger = 0
+RunService.Heartbeat:Connect(function()
+    if not Settings.TriggerEnabled then return end
+    if tick() - lastTrigger < Settings.TriggerDelay then return end
+
+    local target = getClosestInFOV()
+    if not target then return end
+
+    local screenPos = Camera:WorldToViewportPoint(target.Position)
+    local center    = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
+    local dist      = (Vector2.new(screenPos.X, screenPos.Y) - center).Magnitude
+
+    if dist <= Settings.TriggerRadius then
+        mouse1click()
+        lastTrigger = tick()
+    end
+end)
+
+-- ─── ESP ─────────────────────────────────────────────────────────────────────
+local function clearESP(plr)
+    local bag = State.ESPObjects[plr]
+    if not bag then return end
+    for _, obj in pairs(bag) do
+        if typeof(obj) == "Instance" then
+            obj:Destroy()
+        elseif obj.Remove then
+            obj:Remove()
+        end
+    end
+    State.ESPObjects[plr] = nil
+end
+
+local function createESP(plr)
+    if State.ESPObjects[plr] then return end
+    local bag = {}
+
+    local box = Drawing.new("Square")
+    box.Thickness = 1
+    box.Filled    = false
+    box.Color     = Settings.ESPColor
+    box.Visible   = false
+    bag.box = box
+
+    local name = Drawing.new("Text")
+    name.Size     = 14
+    name.Center   = true
+    name.Outline  = true
+    name.Color    = Color3.new(1,1,1)
+    name.Visible  = false
+    bag.name = name
+
+    local health = Drawing.new("Line")
+    health.Thickness = 2
+    health.Color     = Color3.fromRGB(0,255,0)
+    health.Visible   = false
+    bag.health = health
+
+    local tracer = Drawing.new("Line")
+    tracer.Thickness = 1
+    tracer.Color     = Settings.ESPColor
+    tracer.Visible   = false
+    bag.tracer = tracer
+
+    State.ESPObjects[plr] = bag
+end
+
+local function updateESP()
+    if not Settings.ESPEnabled then
+        for plr in pairs(State.ESPObjects) do clearESP(plr) end
+        return
+    end
+
+    for _, plr in ipairs(Players:GetPlayers()) do
+        if plr == LocalPlayer then continue end
+        if not isAlive(plr) then
+            clearESP(plr)
+            continue
+        end
+
+        createESP(plr)
+        local bag  = State.ESPObjects[plr]
+        local char = plr.Character
+        local hrp  = char:FindFirstChild("HumanoidRootPart")
+        local hum  = char:FindFirstChildOfClass("Humanoid")
+        local head = char:FindFirstChild("Head")
+        if not hrp or not hum or not head then continue end
+
+        local dist = (hrp.Position - Camera.CFrame.Position).Magnitude
+        if dist > Settings.ESPMaxDist then
+            bag.box.Visible = false
+            bag.name.Visible = false
+            bag.health.Visible = false
+            bag.tracer.Visible = false
+            continue
+        end
+
+        local color = Settings.ESPColor
+        if Settings.ESPTeamColor and plr.Team and plr.Team.TeamColor then
+            color = plr.Team.TeamColor.Color
+        end
+
+        -- box
+        local top, on1 = Camera:WorldToViewportPoint((hrp.CFrame * CFrame.new(0, 3, 0)).Position)
+        local bot, on2 = Camera:WorldToViewportPoint((hrp.CFrame * CFrame.new(0, -3, 0)).Position)
+        if on1 and on2 then
+            local h = math.abs(top.Y - bot.Y)
+            local w = h * 0.6
+            local cx = (top.X + bot.X) / 2
+            bag.box.Size     = Vector2.new(w, h)
+            bag.box.Position = Vector2.new(cx - w/2, top.Y)
+            bag.box.Color    = color
+            bag.box.Visible  = Settings.ESPBox
+        else
+            bag.box.Visible = false
+        end
+
+        -- name + distance
+        if Settings.ESPName or Settings.ESPDistance then
+            local text = ""
+            if Settings.ESPName then text = plr.Name end
+            if Settings.ESPDistance then
+                text = text .. (text ~= "" and "  " or "") .. string.format("[%d]", math.floor(dist))
+            end
+            bag.name.Text     = text
+            bag.name.Position = Vector2.new(top.X, top.Y - 16)
+            bag.name.Visible  = true
+        else
+            bag.name.Visible = false
+        end
+
+        -- health bar (left of box)
+        if Settings.ESPHealth and bag.box.Visible then
+            local pct = math.clamp(hum.Health / hum.MaxHealth, 0, 1)
+            local barH = bag.box.Size.Y * pct
+            bag.health.From = Vector2.new(bag.box.Position.X - 5, bag.box.Position.Y + bag.box.Size.Y)
+            bag.health.To   = Vector2.new(bag.box.Position.X - 5, bag.box.Position.Y + bag.box.Size.Y - barH)
+            bag.health.Color = Color3.fromRGB(255 * (1-pct), 255 * pct, 40)
+            bag.health.Visible = true
+        else
+            bag.health.Visible = false
+        end
+
+        -- tracer
+        if Settings.ESPTracer then
+            local screen, on = Camera:WorldToViewportPoint(hrp.Position)
+            if on then
+                bag.tracer.From = Vector2.new(Camera.ViewportSize.X/2, Camera.ViewportSize.Y)
+                bag.tracer.To   = Vector2.new(screen.X, screen.Y)
+                bag.tracer.Color = color
+                bag.tracer.Visible = true
+            else
+                bag.tracer.Visible = false
+            end
+        else
+            bag.tracer.Visible = false
+        end
+    end
+end
+
+RunService.RenderStepped:Connect(updateESP)
+
+Players.PlayerRemoving:Connect(function(plr)
+    clearESP(plr)
+end)
+
+-- ─── speed ───────────────────────────────────────────────────────────────────
+local function applySpeed()
+    local char = LocalPlayer.Character
+    if not char then return end
+    local hum = char:FindFirstChildOfClass("Humanoid")
+    if not hum then return end
+    if Settings.SpeedEnabled then
+        hum.WalkSpeed = Settings.WalkSpeed
+        hum.JumpPower = Settings.JumpPower
+    else
+        hum.WalkSpeed = 16
+        hum.JumpPower = 50
+    end
+end
+
+LocalPlayer.CharacterAdded:Connect(function()
+    task.wait(0.3)
+    applySpeed()
+end)
+
+RunService.Heartbeat:Connect(function()
+    if Settings.SpeedEnabled then applySpeed() end
+end)
+
+-- ─── noclip ──────────────────────────────────────────────────────────────────
+local function setNoclip(on)
+    if State.NoclipConn then
+        State.NoclipConn:Disconnect()
+        State.NoclipConn = nil
+    end
+    if not on then
+        local char = LocalPlayer.Character
+        if char then
+            for _, p in ipairs(char:GetDescendants()) do
+                if p:IsA("BasePart") then p.CanCollide = true end
+            end
+        end
+        return
+    end
+    State.NoclipConn = RunService.Stepped:Connect(function()
+        local char = LocalPlayer.Character
+        if not char then return end
+        for _, p in ipairs(char:GetDescendants()) do
+            if p:IsA("BasePart") then p.CanCollide = false end
+        end
+    end)
+end
+
+-- ─── fling / kill ────────────────────────────────────────────────────────────
+local function getTargetPlayer()
+    -- closest player to mouse
+    local closest, closestDist = nil, math.huge
+    local mousePos = UserInputService:GetMouseLocation()
+    for _, plr in ipairs(Players:GetPlayers()) do
+        if plr == LocalPlayer or not isAlive(plr) then continue end
+        local hrp = plr.Character:FindFirstChild("HumanoidRootPart")
+        if not hrp then continue end
+        local screen, on = Camera:WorldToViewportPoint(hrp.Position)
+        if not on then continue end
+        local d = (Vector2.new(screen.X, screen.Y) - mousePos).Magnitude
+        if d < closestDist then
+            closestDist = d
+            closest = plr
+        end
+    end
+    return closest
+end
+
+local function flingPlayer(plr)
+    if not plr or not isAlive(plr) then return end
+    local hrp = plr.Character:FindFirstChild("HumanoidRootPart")
+    local myHrp = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+    if not hrp or not myHrp then return end
+
+    local bv = Instance.new("BodyVelocity")
+    bv.MaxForce = Vector3.new(1e9, 1e9, 1e9)
+    bv.Velocity = (hrp.Position - myHrp.Position).Unit * Settings.FlingForce + Vector3.new(0, Settings.FlingForce * 0.6, 0)
+    bv.Parent = hrp
+    game:GetService("Debris"):AddItem(bv, 0.25)
+end
+
+local function killPlayer(plr)
+    -- best-effort: high velocity into void / floor + humanoid damage if network owner allows
+    if not plr or not isAlive(plr) then return end
+    local char = plr.Character
+    local hrp  = char:FindFirstChild("HumanoidRootPart")
+    local hum  = char:FindFirstChildOfClass("Humanoid")
+    if not hrp or not hum then return end
+
+    -- fling hard + try to set health if we have ownership (most games will reject)
+    local bv = Instance.new("BodyVelocity")
+    bv.MaxForce = Vector3.new(1e9, 1e9, 1e9)
+    bv.Velocity = Vector3.new(0, -500, 0)
+    bv.Parent = hrp
+    game:GetService("Debris"):AddItem(bv, 0.4)
+
+    pcall(function()
+        hum.Health = 0
+    end)
+end
+
+-- ─── UI ──────────────────────────────────────────────────────────────────────
+local Window = Rayfield:CreateWindow({
+    Name = "olliE Universal",
+    LoadingTitle = "olliE Universal",
+    LoadingSubtitle = "aim · esp · trigger · movement",
+    Theme = "Default",
+    ConfigurationSaving = {
+        Enabled = true,
+        FolderName = "olliE",
+        FileName = "Universal"
+    },
+    Discord = { Enabled = false },
+    KeySystem = false,
+})
+
+local CombatTab = Window:CreateTab("Combat", 4483362458)
+local VisualTab = Window:CreateTab("Visuals", 4483362458)
+local MoveTab   = Window:CreateTab("Movement", 4483362458)
+local MiscTab   = Window:CreateTab("Misc", 4483362458)
+
+-- Combat
+CombatTab:CreateSection("Aimbot")
+
+CombatTab:CreateToggle({
+    Name = "Aimbot",
+    CurrentValue = false,
+    Flag = "AimbotEnabled",
+    Callback = function(v)
+        Settings.AimbotEnabled = v
+        if v then createFOV() else if State.FOVCircle then State.FOVCircle.Visible = false end end
+    end,
+})
+
+CombatTab:CreateToggle({
+    Name = "Hold Key (RMB)",
+    CurrentValue = true,
+    Flag = "AimbotHold",
+    Callback = function(v) Settings.AimbotHold = v end,
+})
+
+CombatTab:CreateDropdown({
+    Name = "Aim Part",
+    Options = {"Head", "HumanoidRootPart", "UpperTorso", "LowerTorso"},
+    CurrentOption = "Head",
+    Flag = "AimPart",
+    Callback = function(opt) Settings.AimPart = opt end,
+})
+
+CombatTab:CreateSlider({
+    Name = "FOV",
+    Range = {20, 400},
+    Increment = 5,
+    CurrentValue = 120,
+    Flag = "FOV",
+    Callback = function(v) Settings.FOV = v end,
+})
+
+CombatTab:CreateSlider({
+    Name = "Smoothness",
+    Range = {0, 0.95},
+    Increment = 0.01,
+    CurrentValue = 0.18,
+    Flag = "Smoothness",
+    Callback = function(v) Settings.Smoothness = v end,
+})
+
+CombatTab:CreateSlider({
+    Name = "Prediction",
+    Range = {0, 0.5},
+    Increment = 0.01,
+    CurrentValue = 0.12,
+    Flag = "Prediction",
+    Callback = function(v) Settings.Prediction = v end,
+})
+
+CombatTab:CreateToggle({
+    Name = "Team Check",
+    CurrentValue = true,
+    Flag = "TeamCheck",
+    Callback = function(v) Settings.TeamCheck = v end,
+})
+
+CombatTab:CreateToggle({
+    Name = "Visible Check",
+    CurrentValue = true,
+    Flag = "VisibleCheck",
+    Callback = function(v) Settings.VisibleCheck = v end,
+})
+
+CombatTab:CreateToggle({
+    Name = "Show FOV Circle",
+    CurrentValue = true,
+    Flag = "ShowFOV",
+    Callback = function(v) Settings.ShowFOV = v end,
+})
+
+CombatTab:CreateSection("Triggerbot")
+
+CombatTab:CreateToggle({
+    Name = "Triggerbot",
+    CurrentValue = false,
+    Flag = "TriggerEnabled",
+    Callback = function(v) Settings.TriggerEnabled = v end,
+})
+
+CombatTab:CreateSlider({
+    Name = "Trigger Delay",
+    Range = {0, 0.3},
+    Increment = 0.01,
+    CurrentValue = 0.04,
+    Flag = "TriggerDelay",
+    Callback = function(v) Settings.TriggerDelay = v end,
+})
+
+CombatTab:CreateSlider({
+    Name = "Trigger Radius",
+    Range = {2, 40},
+    Increment = 1,
+    CurrentValue = 8,
+    Flag = "TriggerRadius",
+    Callback = function(v) Settings.TriggerRadius = v end,
+})
+
+-- Visuals
+VisualTab:CreateSection("ESP")
+
+VisualTab:CreateToggle({
+    Name = "ESP Master",
+    CurrentValue = false,
+    Flag = "ESPEnabled",
+    Callback = function(v) Settings.ESPEnabled = v end,
+})
+
+VisualTab:CreateToggle({
+    Name = "Box",
+    CurrentValue = true,
+    Flag = "ESPBox",
+    Callback = function(v) Settings.ESPBox = v end,
+})
+
+VisualTab:CreateToggle({
+    Name = "Name",
+    CurrentValue = true,
+    Flag = "ESPName",
+    Callback = function(v) Settings.ESPName = v end,
+})
+
+VisualTab:CreateToggle({
+    Name = "Health Bar",
+    CurrentValue = true,
+    Flag = "ESPHealth",
+    Callback = function(v) Settings.ESPHealth = v end,
+})
+
+VisualTab:CreateToggle({
+    Name = "Distance",
+    CurrentValue = true,
+    Flag = "ESPDistance",
+    Callback = function(v) Settings.ESPDistance = v end,
+})
+
+VisualTab:CreateToggle({
+    Name = "Tracer",
+    CurrentValue = false,
+    Flag = "ESPTracer",
+    Callback = function(v) Settings.ESPTracer = v end,
+})
+
+VisualTab:CreateToggle({
+    Name = "Team Colors",
+    CurrentValue = true,
+    Flag = "ESPTeamColor",
+    Callback = function(v) Settings.ESPTeamColor = v end,
+})
+
+VisualTab:CreateSlider({
+    Name = "Max Distance",
+    Range = {100, 3000},
+    Increment = 50,
+    CurrentValue = 1200,
+    Flag = "ESPMaxDist",
+    Callback = function(v) Settings.ESPMaxDist = v end,
+})
+
+VisualTab:CreateColorPicker({
+    Name = "ESP Color",
+    Color = Color3.fromRGB(0, 255, 140),
+    Flag = "ESPColor",
+    Callback = function(c) Settings.ESPColor = c end,
+})
+
+-- Movement
+MoveTab:CreateSection("Speed / Jump")
+
+MoveTab:CreateToggle({
+    Name = "Speed Hack",
+    CurrentValue = false,
+    Flag = "SpeedEnabled",
+    Callback = function(v)
+        Settings.SpeedEnabled = v
+        applySpeed()
+    end,
+})
+
+MoveTab:CreateSlider({
+    Name = "Walk Speed",
+    Range = {16, 200},
+    Increment = 1,
+    CurrentValue = 50,
+    Flag = "WalkSpeed",
+    Callback = function(v)
+        Settings.WalkSpeed = v
+        if Settings.SpeedEnabled then applySpeed() end
+    end,
+})
+
+MoveTab:CreateSlider({
+    Name = "Jump Power",
+    Range = {50, 300},
+    Increment = 5,
+    C
